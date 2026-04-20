@@ -1,0 +1,31 @@
+{
+  "name": "country-empire",
+  "version": "1.0.0",
+  "description": "country club game",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ilaybargil-coder/Country-Empire.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ilaybargil-coder/Country-Empire/issues"
+  },
+  "homepage": "https://github.com/ilaybargil-coder/Country-Empire#readme",
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vite": "^8.0.9"
+  },
+  "dependencies": {
+    "phaser": "^4.0.0"
+  }
+}
