@@ -1,232 +1,272 @@
 import * as Phaser from 'phaser';
 import {
-  WORLD_WIDTH,
-  WORLD_HEIGHT,
-  GUEST_SPAWN_INTERVAL_MS,
-  MAX_GUESTS,
-  TILE_SIZE,
+  WORLD_WIDTH, WORLD_HEIGHT, GAME_WIDTH, GAME_HEIGHT,
+  GUEST_SPAWN_INTERVAL_MS, MAX_GUESTS, TILE_SIZE,
+  GYM_CENTER_X, GYM_CENTER_Y, GYM_W, GYM_H,
+  POOL_CENTER_X, POOL_CENTER_Y, POOL_W, POOL_H,
+  PATH_Y, PATH_HEIGHT, C,
 } from '../utils/Constants';
-import { Facility, GYM_TEMPLATE, POOL_TEMPLATE, FacilityData } from '../entities/Facility';
+import { Facility } from '../entities/Facility';
+import { GymFacility,  createGymConfig  } from '../facilities/GymFacility';
+import { PoolFacility, createPoolConfig } from '../facilities/PoolFacility';
 import { Guest } from '../entities/Guest';
-import { UIManager } from '../ui/UIManager';
 import { EconomyManager } from '../systems/EconomyManager';
-
-let facilityCounter = 0;
+import { MoodManager } from '../systems/MoodManager';
+import { UIManager } from '../ui/UIManager';
+import { FacilityType } from '../utils/Enums';
 
 export class MainScene extends Phaser.Scene {
-  private facilities: Facility[] = [];
-  private guests: Guest[] = [];
-  private ui!: UIManager;
+  private facilities:  Facility[] = [];
+  private guests:      Guest[]    = [];
+  private ui!:         UIManager;
+  private moodMgr!:    MoodManager;
   private spawnTimer!: Phaser.Time.TimerEvent;
-  private poolCount: number = 0;
 
-  private isDragging: boolean = false;
-  private dragStartX: number = 0;
-  private dragStartY: number = 0;
-  private camStartX: number = 0;
-  private camStartY: number = 0;
+  private isDragging = false;
+  private dragStart  = { x: 0, y: 0 };
+  private camStart   = { x: 0, y: 0 };
 
-  constructor() {
-    super({ key: 'MainScene' });
-  }
+  constructor() { super({ key: 'MainScene' }); }
 
   preload(): void {
-    const g = this.add.graphics();
-    g.fillStyle(0xffffff);
-    g.fillCircle(8, 8, 8);
-    g.generateTexture('guest_texture', 16, 16);
-    g.destroy();
+    // 1×1 white pixel used as physics-body texture (invisible)
+    const pg = this.add.graphics();
+    pg.fillStyle(0xffffff, 0);
+    pg.fillRect(0, 0, 2, 2);
+    pg.generateTexture('guest_phys', 2, 2);
+    pg.destroy();
   }
 
   create(): void {
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
-    this.drawWorld();
-    this.buildInitialFacilities();
+    this.moodMgr = new MoodManager();
 
-    this.ui = new UIManager((type) => {
-      if (type === 'pool') this.tryBuildPool();
-    });
+    this.drawWorld();
+    this.placeFacilities();
+
+    this.ui = new UIManager(
+      EconomyManager.getInstance(),
+      (type) => this.buildFacility(type),
+      () => this.guests.length,
+    );
+
+    this.events.on('guest_clicked', (g: Guest) => this.ui.showInspector(g));
 
     this.setupCamera();
     this.setupZoom();
 
     this.spawnTimer = this.time.addEvent({
       delay: GUEST_SPAWN_INTERVAL_MS,
-      loop: true,
+      loop:  true,
       callback: this.spawnGuest,
       callbackScope: this,
     });
-
+    this.spawnGuest();
     this.spawnGuest();
   }
 
+  // ─── World drawing ──────────────────────────────────────────────────────────
   private drawWorld(): void {
-    const bg = this.add.graphics();
-    bg.fillStyle(0x3a7d44);
-    bg.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    const g = this.add.graphics();
+    g.setDepth(0);
 
-    bg.lineStyle(1, 0x2d6636, 0.35);
-    for (let x = 0; x <= WORLD_WIDTH; x += TILE_SIZE) {
-      bg.lineBetween(x, 0, x, WORLD_HEIGHT);
-    }
-    for (let y = 0; y <= WORLD_HEIGHT; y += TILE_SIZE) {
-      bg.lineBetween(0, y, WORLD_WIDTH, y);
-    }
+    // Grass base
+    g.fillStyle(C.GRASS);
+    g.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
-    const path = this.add.graphics();
-    path.fillStyle(0xc8a96e, 0.9);
-    path.fillRect(WORLD_WIDTH / 2 - 30, 0, 60, WORLD_HEIGHT);
-    path.fillRect(0, WORLD_HEIGHT / 2 - 30, WORLD_WIDTH, 60);
-
-    const pool = this.add.graphics();
-    pool.fillStyle(0x40c0e0, 0.25);
-    pool.fillRect(120, 120, 200, 140);
-    this.add.text(220, 190, 'Decorative\nPond', {
-      fontSize: '10px', color: '#aaddff', align: 'center',
-    }).setOrigin(0.5);
-  }
-
-  private buildInitialFacilities(): void {
-    facilityCounter++;
-    const gymData: FacilityData = {
-      ...GYM_TEMPLATE,
-      id: `facility_${facilityCounter}`,
-      x: WORLD_WIDTH / 2 - 200,
-      y: WORLD_HEIGHT / 2 - 150,
-      currentCapacity: 0,
-    };
-    this.facilities.push(new Facility(this, gymData));
-
-    facilityCounter++;
-    const gym2Data: FacilityData = {
-      ...GYM_TEMPLATE,
-      id: `facility_${facilityCounter}`,
-      x: WORLD_WIDTH / 2 + 200,
-      y: WORLD_HEIGHT / 2 + 150,
-      currentCapacity: 0,
-    };
-    this.facilities.push(new Facility(this, gym2Data));
-  }
-
-  private tryBuildPool(): void {
-    const cost = POOL_TEMPLATE.costToBuild;
-    const success = EconomyManager.getInstance().spendMoney(cost);
-    if (!success) {
-      console.warn('Not enough money to build pool');
-      return;
+    // Grass tile darker variation
+    g.fillStyle(C.GRASS_DARK, 0.25);
+    for (let tx = 0; tx < WORLD_WIDTH; tx += TILE_SIZE * 2) {
+      for (let ty = 0; ty < WORLD_HEIGHT; ty += TILE_SIZE * 2) {
+        g.fillRect(tx, ty, TILE_SIZE, TILE_SIZE);
+      }
     }
 
-    this.poolCount++;
-    facilityCounter++;
-    const offsetX = (this.poolCount % 3) * 220 - 220;
-    const offsetY = Math.floor(this.poolCount / 3) * 180;
+    // ── Main horizontal path ──────────────────────────────────────────────────
+    g.fillStyle(C.PATH);
+    g.fillRect(0, PATH_Y - PATH_HEIGHT / 2, WORLD_WIDTH, PATH_HEIGHT);
+    // Path darker border
+    g.fillStyle(C.PATH_DARK);
+    g.fillRect(0, PATH_Y - PATH_HEIGHT / 2,      WORLD_WIDTH, 6);
+    g.fillRect(0, PATH_Y + PATH_HEIGHT / 2 - 6,  WORLD_WIDTH, 6);
+    // Path cobble pattern
+    g.fillStyle(C.PATH_DARK, 0.35);
+    for (let px = 0; px < WORLD_WIDTH; px += 48) {
+      g.fillRect(px + 1, PATH_Y - PATH_HEIGHT / 2 + 6, 46, PATH_HEIGHT - 12);
+    }
 
-    const poolData: FacilityData = {
-      ...POOL_TEMPLATE,
-      id: `facility_${facilityCounter}`,
-      x: WORLD_WIDTH / 2 + offsetX,
-      y: WORLD_HEIGHT / 2 - 300 + offsetY,
-      currentCapacity: 0,
-    };
-    this.facilities.push(new Facility(this, poolData));
+    // ── Vertical connector paths (gym & pool entrances) ───────────────────────
+    const gymLX  = GYM_CENTER_X  - GYM_W  / 2;
+    const gymRX  = GYM_CENTER_X  + GYM_W  / 2;
+    const poolLX = POOL_CENTER_X - POOL_W / 2;
+    const poolRX = POOL_CENTER_X + POOL_W / 2;
+
+    g.fillStyle(C.PATH);
+    g.fillRect(gymLX,  0,          GYM_W,  WORLD_HEIGHT);
+    g.fillRect(poolLX, 0,          POOL_W, WORLD_HEIGHT);
+
+    // Re-draw grass over the path rectangles but leave the building footprints
+    // (buildings draw their own floors, this gives a corridor effect)
+
+    // ── Decorative bushes ─────────────────────────────────────────────────────
+    const bushPositions = [
+      // Along path edges
+      { x: 200,  y: PATH_Y - 80 }, { x: 400,  y: PATH_Y - 80 },
+      { x: 600,  y: PATH_Y - 80 }, { x: 1900, y: PATH_Y - 80 },
+      { x: 2100, y: PATH_Y - 80 }, { x: 2300, y: PATH_Y - 80 },
+      { x: 200,  y: PATH_Y + 80 }, { x: 400,  y: PATH_Y + 80 },
+      { x: 2100, y: PATH_Y + 80 }, { x: 2300, y: PATH_Y + 80 },
+      // Between buildings
+      { x: GYM_CENTER_X + GYM_W / 2 + 60, y: GYM_CENTER_Y - 80 },
+      { x: GYM_CENTER_X + GYM_W / 2 + 60, y: GYM_CENTER_Y + 80 },
+    ];
+    for (const bp of bushPositions) {
+      this.drawBush(g, bp.x, bp.y);
+    }
+
+    // ── Trees (corners) ───────────────────────────────────────────────────────
+    for (const tp of [
+      { x: 100, y: 100 }, { x: WORLD_WIDTH - 100, y: 100 },
+      { x: 100, y: WORLD_HEIGHT - 100 }, { x: WORLD_WIDTH - 100, y: WORLD_HEIGHT - 100 },
+      { x: 500, y: 280 }, { x: WORLD_WIDTH - 500, y: 280 },
+    ]) {
+      this.drawTree(g, tp.x, tp.y);
+    }
   }
 
+  private drawBush(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
+    g.fillStyle(C.BUSH_DARK);
+    g.fillCircle(cx - 8, cy + 6, 14);
+    g.fillCircle(cx + 8, cy + 6, 14);
+    g.fillStyle(C.BUSH);
+    g.fillCircle(cx - 8, cy,     14);
+    g.fillCircle(cx + 8, cy,     14);
+    g.fillCircle(cx,     cy - 6, 14);
+  }
+
+  private drawTree(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
+    // Trunk
+    g.fillStyle(0x5d4037);
+    g.fillRect(cx - 6, cy + 10, 12, 30);
+    // Canopy layers
+    g.fillStyle(0x2e7d32);
+    g.fillCircle(cx, cy + 10, 30);
+    g.fillStyle(0x388e3c);
+    g.fillCircle(cx, cy - 4, 26);
+    g.fillStyle(0x43a047);
+    g.fillCircle(cx, cy - 14, 20);
+  }
+
+  // ─── Facility placement ─────────────────────────────────────────────────────
+  private placeFacilities(): void {
+    this.facilities.push(new GymFacility(this,  createGymConfig()));
+    this.facilities.push(new PoolFacility(this, createPoolConfig()));
+  }
+
+  private buildFacility(type: FacilityType): void {
+    const eco = EconomyManager.getInstance();
+    if (type === FacilityType.GYM) {
+      const cfg = createGymConfig({
+        x: GYM_CENTER_X  + (this.facilities.filter(f => f.type === FacilityType.GYM).length  * 60),
+        y: GYM_CENTER_Y  + 50,
+      });
+      if (!eco.spendMoney(cfg.costToBuild)) return;
+      this.facilities.push(new GymFacility(this, cfg));
+      eco.addReputation(0.5);
+    } else if (type === FacilityType.POOL) {
+      const cfg = createPoolConfig({
+        x: POOL_CENTER_X + (this.facilities.filter(f => f.type === FacilityType.POOL).length * 60),
+        y: POOL_CENTER_Y + 50,
+      });
+      if (!eco.spendMoney(cfg.costToBuild)) return;
+      this.facilities.push(new PoolFacility(this, cfg));
+      eco.addReputation(1);
+    }
+  }
+
+  // ─── NPC spawning ───────────────────────────────────────────────────────────
   private spawnGuest(): void {
     if (this.guests.length >= MAX_GUESTS) return;
 
     const edge = Math.floor(Math.random() * 4);
-    let spawnX = 0;
-    let spawnY = 0;
-
+    let sx: number, sy: number;
     switch (edge) {
-      case 0: spawnX = Math.random() * WORLD_WIDTH; spawnY = 0; break;
-      case 1: spawnX = Math.random() * WORLD_WIDTH; spawnY = WORLD_HEIGHT; break;
-      case 2: spawnX = 0; spawnY = Math.random() * WORLD_HEIGHT; break;
-      default: spawnX = WORLD_WIDTH; spawnY = Math.random() * WORLD_HEIGHT; break;
+      case 0:  sx = Math.random() * WORLD_WIDTH; sy = -20;              break;
+      case 1:  sx = Math.random() * WORLD_WIDTH; sy = WORLD_HEIGHT + 20; break;
+      case 2:  sx = -20;               sy = Math.random() * WORLD_HEIGHT; break;
+      default: sx = WORLD_WIDTH + 20;  sy = Math.random() * WORLD_HEIGHT; break;
     }
 
-    const guest = new Guest(this, spawnX, spawnY, (g) => {
-      this.removeGuest(g);
-    });
+    const guest = new Guest(this, sx, sy, this.moodMgr, (g) => this.removeGuest(g));
     this.guests.push(guest);
     this.ui.updateGuestCount(this.guests.length);
   }
 
   private removeGuest(guest: Guest): void {
-    const idx = this.guests.indexOf(guest);
-    if (idx !== -1) {
-      this.guests.splice(idx, 1);
-      this.ui.updateGuestCount(this.guests.length);
-    }
+    const i = this.guests.indexOf(guest);
+    if (i !== -1) this.guests.splice(i, 1);
+    this.ui.updateGuestCount(this.guests.length);
   }
 
+  // ─── Camera ─────────────────────────────────────────────────────────────────
   private setupCamera(): void {
     this.cameras.main.setScroll(
-      WORLD_WIDTH / 2 - this.scale.width / 2,
-      WORLD_HEIGHT / 2 - this.scale.height / 2,
+      WORLD_WIDTH  / 2 - GAME_WIDTH  / 2,
+      WORLD_HEIGHT / 2 - GAME_HEIGHT / 2,
     );
 
     this.input.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
-      if (ptr.button === 1 || ptr.button === 2) {
-        this.isDragging = true;
-        this.dragStartX = ptr.x;
-        this.dragStartY = ptr.y;
-        this.camStartX = this.cameras.main.scrollX;
-        this.camStartY = this.cameras.main.scrollY;
-      }
+      if (ptr.button !== 1 && ptr.button !== 2) return;
+      this.isDragging  = true;
+      this.dragStart   = { x: ptr.x, y: ptr.y };
+      this.camStart    = { x: this.cameras.main.scrollX, y: this.cameras.main.scrollY };
     });
-
     this.input.on('pointermove', (ptr: Phaser.Input.Pointer) => {
       if (!this.isDragging) return;
-      const dx = ptr.x - this.dragStartX;
-      const dy = ptr.y - this.dragStartY;
-      this.cameras.main.setScroll(this.camStartX - dx, this.camStartY - dy);
+      this.cameras.main.setScroll(
+        this.camStart.x - (ptr.x - this.dragStart.x),
+        this.camStart.y - (ptr.y - this.dragStart.y),
+      );
     });
-
-    this.input.on('pointerup', () => {
-      this.isDragging = false;
-    });
+    this.input.on('pointerup', () => { this.isDragging = false; });
 
     const keys = this.input.keyboard?.addKeys({
-      up: Phaser.Input.Keyboard.KeyCodes.W,
-      down: Phaser.Input.Keyboard.KeyCodes.S,
-      left: Phaser.Input.Keyboard.KeyCodes.A,
+      up:    Phaser.Input.Keyboard.KeyCodes.W,
+      down:  Phaser.Input.Keyboard.KeyCodes.S,
+      left:  Phaser.Input.Keyboard.KeyCodes.A,
       right: Phaser.Input.Keyboard.KeyCodes.D,
     }) as Record<string, Phaser.Input.Keyboard.Key> | undefined;
 
-    this.events.on('update', (_time: number, _delta: number) => {
+    this.events.on('update', () => {
       if (!keys) return;
-      const speed = 6;
-      if (keys['up']?.isDown) this.cameras.main.scrollY -= speed;
-      if (keys['down']?.isDown) this.cameras.main.scrollY += speed;
-      if (keys['left']?.isDown) this.cameras.main.scrollX -= speed;
-      if (keys['right']?.isDown) this.cameras.main.scrollX += speed;
+      const spd = 7;
+      if (keys['up']?.isDown)    this.cameras.main.scrollY -= spd;
+      if (keys['down']?.isDown)  this.cameras.main.scrollY += spd;
+      if (keys['left']?.isDown)  this.cameras.main.scrollX -= spd;
+      if (keys['right']?.isDown) this.cameras.main.scrollX += spd;
     });
   }
 
   private setupZoom(): void {
-    this.input.on('wheel', (_ptr: Phaser.Input.Pointer, _objs: unknown[], _dx: number, dy: number) => {
-      const zoom = this.cameras.main.zoom;
-      const newZoom = Phaser.Math.Clamp(zoom - dy * 0.001, 0.4, 2);
-      this.cameras.main.setZoom(newZoom);
+    this.input.on('wheel', (_p: Phaser.Input.Pointer, _o: unknown[], _dx: number, dy: number) => {
+      const z = Phaser.Math.Clamp(this.cameras.main.zoom - dy * 0.0008, 0.35, 2.2);
+      this.cameras.main.setZoom(z);
     });
   }
 
   update(_time: number, delta: number): void {
-    for (const guest of this.guests) {
-      guest.update(delta, this.facilities);
-    }
+    for (const g of this.guests) g.update(delta, this.facilities);
   }
 
   shutdown(): void {
-    this.ui.destroy();
     this.spawnTimer.destroy();
-    for (const guest of this.guests) guest.destroyFully();
-    for (const facility of this.facilities) facility.destroy();
-    this.guests = [];
+    for (const g of this.guests)   g.destroyFully();
+    for (const f of this.facilities) f.destroy();
+    this.guests     = [];
     this.facilities = [];
+    this.ui.destroy();
     EconomyManager.getInstance().reset();
   }
 }

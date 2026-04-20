@@ -6,7 +6,7 @@ export const gameConfig: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
   width: GAME_WIDTH,
   height: GAME_HEIGHT,
-  backgroundColor: '#1a1a2e',
+  backgroundColor: '#0a0f1e',
   physics: {
     default: 'arcade',
     arcade: {
